@@ -76,7 +76,8 @@ Using UMPIRE framework (adapted):
 2. [Add function Z]
 3. [Update tests]
 
-**Implement:** [Link to your branch/commits as you work]
+**Implement:** [Link to your branch/commits as you work]  
+- *Link to the working branch:* https://github.com/daria-hrabar/sdk/tree/fix-issue-280
 
 **Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
 
