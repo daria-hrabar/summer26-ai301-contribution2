@@ -1,9 +1,9 @@
-# Contribution [#]: [Issue Title]
+# Contribution 2: Let taps continue to next partitions and/or streams upon certain errors #280
 
-**Contribution Number:** [1 / 2 / 3]  
-**Student:** [Your Name]  
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I / Phase II / Phase III / Phase IV] [In Progress / Complete]
+**Contribution Number:** 2  
+**Student:** Daria Hrabar 
+**Issue:** [Issue #280](https://github.com/meltano/sdk/issues/280)
+**Status:** Phase I In Progress
 
 ---
 
