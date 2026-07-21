@@ -9,7 +9,7 @@
 
 ## Why I Chose This Issue
 
-By taking on this issue, I hope to expand my knowledge of writing adaptable and reliable Python programs, with emphasis on comprehensive error handling. I believe my applied AI engineering skills, enhanced by developing [a solution to the nested replication keys issue in the Meltano SDK repository](feat: support nested replication keys via dotted path by daria-hrabar · Pull Request #3690 · meltano/sdk), meet the demand of this issue to introduce new error-handling behaviors.
+By taking on this issue, I hope to expand my knowledge of writing adaptable and reliable Python programs, with emphasis on comprehensive error handling. I believe my applied AI engineering skills, enhanced by developing [a solution to the nested replication keys issue in the Meltano SDK repository](https://github.com/meltano/sdk/pull/3690), meet the demand of this issue to introduce new error-handling behaviors.
 
 ---
 
