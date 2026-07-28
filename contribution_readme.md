@@ -3,7 +3,7 @@
 **Contribution Number:** 2  
 **Student:** Daria Hrabar  
 **Issue:** [Issue #280](https://github.com/meltano/sdk/issues/280)  
-**Status:** Phase I Completed  
+**Status:** Phase II In Progress  
 
 ---
 
@@ -85,6 +85,7 @@ When working in VS Code, the virtual environment should become activated automat
 
 ### Reproduction Evidence
 
+- **Link to the working branch:** [daria-hrabar/sdk/fix-issue-280](https://github.com/daria-hrabar/sdk/tree/fix-issue-280)
 - **Commit showing reproduction:** [Add reproduce_issue_280.py](https://github.com/meltano/sdk/commit/9e9d0f9c92468a96d3168ecc37d3afb33522ac3c)
 - **Terminal output after running reproduction script:**
 ```
