@@ -23,8 +23,8 @@ The Meltano Singer SDK lacks a mechanism for taps to gracefully continue syncing
 
 When a tap encounters a recoverable or partition-scoped error during sync, it should:
 
-1. *At the partition level:* catch the error in `Stream._sync_records` (in `singer_sdk/streams/core.py`), log or record it, preserve whatever state has been written so far, and `continue` to the next partition context in the loop.
-2. *At the stream level:* catch the error in `Tap.sync_all` (in `singer_sdk/tap_base.py`), and similarly `continue` to the next stream rather than crashing the process.
+1. **At the partition level:** catch the error in `Stream._sync_records` (in `singer_sdk/streams/core.py`), log or record it, preserve whatever state has been written so far, and `continue` to the next partition context in the loop.
+2. **At the stream level:** catch the error in `Tap.sync_all` (in `singer_sdk/tap_base.py`), and similarly `continue` to the next stream rather than crashing the process.
 3. Optionally return a non-zero exit code to signal partial failure to the calling process, while still emitting all successfully retrieved records and state.
 
 As proposed by maintainer [@edgarrmondragon](https://github.com/meltano/sdk/issues/280), this would be implemented via a new `EndOfStreamError` exception class that tap developers can raise to explicitly signal "skip this partition/stream and keep going."
@@ -57,14 +57,14 @@ A concrete example is `tap-github`, which fetches data for a list of repositorie
 
 ### Environment Setup
 
-*Step 1:* Install project prerequisites on your local device. More details can be found on [the Prerequisites page](https://docs.meltano.com/contribute/prerequisites/) within the Meltano Documentation.
+**Step 1:** Install project prerequisites on your local device. More details can be found on [the Prerequisites page](https://docs.meltano.com/contribute/prerequisites/) within the Meltano Documentation.
   1. [Python 3.10+](https://www.python.org/downloads/)
   2. [uv](https://docs.astral.sh/uv/)
   3. [Node 18+](https://nodejs.org/)
   4. [Yarn](https://yarnpkg.com/)
   5. Although not listed as an official prerequisite, it is also recommended to install [Visual Studio Build Tools for C++](https://visualstudio.microsoft.com/visual-cpp-build-tools/) to avoid the `ModuleNotFoundError`.
 
-*Step 2:* Complete the setup of your local development environment.
+**Step 2:** Complete the setup of your local development environment.
   1. Clone the forked repository to your local device by either:
      - Running `git clone git@github.com:[your/github/file/path].git` and `cd sdk` in your terminal, or
      - Completing the process directly through GitHub Desktop.
@@ -76,15 +76,62 @@ When working in VS Code, the virtual environment should become activated automat
 
 ### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. Create a reproduction script (`reproduce_issue_280.py`) at the root of the forked SDK repository defining a `BrokenStream` with three partitions, `good-repo`, `broken-repo`, and `another-good-repo`, where `get_records()` raises a `RuntimeError` on the second partition, and a `BrokenTap` that registers it.
+2. Run the script from the terminal:
+```powershell
+   python reproduce_issue_280.py --config '{}' sync
+```
+3. **Observed result:** The tap successfully emits a record for `good-repo`, then crashes on `broken-repo` with an unhandled `RuntimeError`. `another-good-repo` is never reached and produces no output. The process exits with a non-zero error code.
 
 ### Reproduction Evidence
 
-- **Commit showing reproduction:** [Link to commit in your fork]
-- **Screenshots/logs:** [If applicable]
-- **My findings:** [What you discovered during reproduction]
+- **Commit showing reproduction:** [Add reproduce_issue_280.py](https://github.com/meltano/sdk/commit/9e9d0f9c92468a96d3168ecc37d3afb33522ac3c)
+- **Terminal output after running reproduction script:**
+```
+2026-07-28 13:40:18,562 | INFO | tap-broken | tap-broken v[could not be detected], Meltano SDK v0.54.3.dev51+g1b205c028
+2026-07-28 13:40:18,568 | INFO | tap-broken | Skipping parse of env var settings...
+2026-07-28 13:40:18,585 | INFO | tap-broken.broken_stream | Beginning sync of 'broken_stream' in full_table mode
+{"type":"SCHEMA","stream":"broken_stream","schema":{"properties":{"id":{"type":["integer","null"]}},"type":"object","$schema":"https://json-schema.org/draft/2020-12/schema"},"key_properties":["id"]}
+2026-07-28 13:40:18,598 | WARNING | tap-broken.broken_stream | Properties ('repo',) were present in the 'broken_stream' stream but not found in catalog schema. Ignoring.
+{"type":"RECORD","stream":"broken_stream","record":{"id":1},"time_extracted":"2026-07-28T17:40:18.599427+00:00"}
+2026-07-28 13:40:18,600 | INFO | singer_sdk.metrics | METRIC: {"type":"timer","metric":"sync_duration","value":0.0014007091522216797,"tags":{"stream":"broken_stream","pid":26348,"context":{"repo":"broken-repo"},"status":"failed"}}
+2026-07-28 13:40:18,606 | INFO | singer_sdk.metrics | METRIC: {"type":"counter","metric":"record_count","value":1,"tags":{"stream":"broken_stream","pid":26348,"context":{"repo":"broken-repo"}}}
+2026-07-28 13:40:18,612 | ERROR | tap-broken.broken_stream | An unhandled error occurred while syncing 'broken_stream'
+2026-07-28 13:40:18,619 | ERROR | tap-broken | Simulated persistent error for repo: broken-repo
+Traceback (most recent call last):
+File "/file_path/reproduce_issue_280.py", line 49, in <module>
+BrokenTap.cli()
+~~~~~~~~~~~~~^^
+File "/file_path/.venv/Lib/site-packages/click/core.py", line 1524, in call
+return self.main(*args, **kwargs)
+~~~~~~~~~^^^^^^^^^^^^^^^^^
+File "/file_path/.venv/Lib/site-packages/click/core.py", line 1445, in main
+rv = self.invoke(ctx)
+File "/file_path/singer_sdk/plugin_base.py", line 148, in invoke
+return super().invoke(ctx)
+~~~~~~~~~~~~~~^^^^^
+File "/file_path/.venv/Lib/site-packages/click/core.py", line 1308, in invoke
+return ctx.invoke(self.callback, **ctx.params)
+~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/file_path/.venv/Lib/site-packages/click\core.py", line 877, in invoke
+return callback(*args, **kwargs)
+File "/file_path/singer_sdk/tap_base.py", line 574, in invoke
+tap.sync_all()
+~~~~~~~~~~~~^^
+File "/file_path/singer_sdk/tap_base.py", line 513, in sync_all
+stream.sync()
+~~~~~~~~~~~^^
+File "/file_path/singer_sdk/streams/core.py", line 1302, in sync
+for _ in self._sync_records(context=context):
+~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+File "/file_path/singer_sdk/streams/core.py", line 1174, in _sync_records
+for idx, record_result in enumerate(self.get_records(current_context)):
+~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/file_path/reproduce_issue_280.py", line 34, in get_records
+raise RuntimeError(msg)
+RuntimeError: Simulated persistent error for repo: broken-repo
+```
+- **My findings:** The SDK's metrics logger does record the failure — `"context":{"repo":"broken-repo"},"status":"failed"}` appears in the output, meaning the infrastructure to detect a partition failure already exists. What is missing is the recovery logic: after detecting the failure, the SDK has no mechanism to log it, preserve state, and continue to the next partition.
 
 ---
 
