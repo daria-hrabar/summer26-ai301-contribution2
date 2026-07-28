@@ -39,7 +39,7 @@ A concrete example is `tap-github`, which fetches data for a list of repositorie
 
 | File | Relevant Location | What Changes |
 |---|---|---|
-| `singer_sdk/streams/core.py` | `Stream._sync_records` — the `for context in partitions` loop | Wrap loop body in `try/except EndOfStreamError: continue` |
+| `singer_sdk/streams/core.py` | `Stream._sync_records` — the `for context_element in context_list or [{}]:` loop | Wrap loop body in `try/except EndOfStreamError: continue` |
 | `singer_sdk/tap_base.py` | `Tap.sync_all` — the stream iteration loop | Wrap each stream sync in `try/except EndOfStreamError: continue` |
 | `singer_sdk/exceptions.py` | Top-level exception definitions | Add new `EndOfStreamError` exception class alongside `RetriableAPIError` and `FatalAPIError` |
 
