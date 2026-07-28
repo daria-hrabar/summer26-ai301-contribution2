@@ -57,7 +57,22 @@ A concrete example is `tap-github`, which fetches data for a list of repositorie
 
 ### Environment Setup
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
+*Step 1:* Install project prerequisites on your local device. More details can be found on [the Prerequisites page](https://docs.meltano.com/contribute/prerequisites/) within the Meltano Documentation.
+  1. [Python 3.10+](https://www.python.org/downloads/)
+  2. [uv](https://docs.astral.sh/uv/)
+  3. [Node 18+](https://nodejs.org/)
+  4. [Yarn](https://yarnpkg.com/)
+  5. Although not listed as an official prerequisite, it is also recommended to install [Visual Studio Build Tools for C++](https://visualstudio.microsoft.com/visual-cpp-build-tools/) to avoid the ModuleNotFoundError.
+
+*Step 2:* Complete the setup of your local development environment.
+  1. Clone the forked repository to your local device by either:
+     - Running `git clone git@github.com:[your/github/file/path].git` and `cd sdk` in your terminal, or
+     - Completing the process directly through GitHub Desktop.
+  2. Install Nox and pre-commit by running `uv tool install nox` and `uv tool install pre-commit`.
+  3. If not already there, navigate to the cloned local repository and install dependencies by running `uv sync`.
+  4. Install pre-commit hooks by running `pre-commit install --install-hooks`. 
+
+When working in VS Code, the virtual environment should become activated automatically. If not, run the `.venv\Scripts\Activate.ps1` command in your terminal. Your .venv is activated if you can see (singer-sdk) displayed at the beginning of your file path in the terminal window.
 
 ### Steps to Reproduce
 
