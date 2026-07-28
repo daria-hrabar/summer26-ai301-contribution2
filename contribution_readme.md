@@ -17,19 +17,39 @@ By taking on this issue, I hope to expand my knowledge of writing adaptable and 
 
 ### Problem Description
 
-[In your own words, what's broken or missing?]
+The Meltano Singer SDK lacks a mechanism for taps to gracefully continue syncing when a non-fatal error occurs mid-run. While the SDK already defines `RetriableAPIError` and `FatalAPIError` for HTTP-level error classification, there is no equivalent signal that tells the tap to skip the current partition or stream and move on to the next one. As a result, any unhandled error during a partitioned sync aborts the entire tap run — all remaining partitions and streams are abandoned, and their data is never extracted.
 
 ### Expected Behavior
 
-[What should happen?]
+When a tap encounters a recoverable or partition-scoped error during sync, it should:
+
+1. *At the partition level* — catch the error in `Stream._sync_records` (in `singer_sdk/streams/core.py`), log or record it, preserve whatever state has been written so far, and `continue` to the next partition context in the loop.
+2. *At the stream level* — catch the error in `Tap.sync_all` (in `singer_sdk/tap_base.py`), and similarly `continue` to the next stream rather than crashing the process.
+3. Optionally return a non-zero exit code to signal partial failure to the calling process, while still emitting all successfully retrieved records and state.
+
+As proposed by maintainer [@edgarrmondragon](https://github.com/meltano/sdk/issues/280), this would be implemented via a new `EndOfStreamError` exception class that tap developers can raise to explicitly signal "skip this partition/stream and keep going."
 
 ### Current Behavior
 
-[What actually happens?]
+In `Stream._sync_records`, the code iterates through a list of partition contexts with no surrounding error handling. If an exception is raised for any partition — even a persistent, partition-specific API error — the exception propagates up uncaught, halting the entire tap process. All subsequent partitions and streams in the run are silently skipped. Because the tap runs as a separate subprocess, the calling process (e.g., Meltano) cannot inspect the exception details; it only sees a failed exit code with no partial results or state.
+
+A concrete example is `tap-github`, which fetches data for a list of repositories (partitions). If one repository returns a persistent error, no data is extracted for any repo further down the list.
 
 ### Affected Components
 
-[Which parts of the codebase are involved?]
+| File | Relevant Location | What Changes |
+|---|---|---|
+| `singer_sdk/streams/core.py` | `Stream._sync_records` — the `for context in partitions` loop | Wrap loop body in `try/except EndOfStreamError: continue` |
+| `singer_sdk/tap_base.py` | `Tap.sync_all` — the stream iteration loop | Wrap each stream sync in `try/except EndOfStreamError: continue` |
+| `singer_sdk/exceptions.py` | Top-level exception definitions | Add new `EndOfStreamError` exception class alongside `RetriableAPIError` and `FatalAPIError` |
+
+### Solution Acceptance Criteria
+- A new `EndOfStreamError` (or equivalent) exception is importable from `singer_sdk.exceptions`.
+- Raising `EndOfStreamError` inside `get_records()` for a given partition causes that partition to be skipped; remaining partitions in the same stream continue to sync normally.
+- Raising `EndOfStreamError` at the stream level causes that stream to be skipped; remaining streams in the tap continue to sync.
+- State is correctly written for all successfully completed partitions/streams before the error.
+- Existing behavior for `FatalAPIError` (halt everything) and `RetriableAPIError` (retry with backoff) is unchanged.
+- Unit tests cover both the partition-level and stream-level skip scenarios.
 
 ---
 
