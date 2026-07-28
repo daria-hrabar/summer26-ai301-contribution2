@@ -140,31 +140,38 @@ RuntimeError: Simulated persistent error for repo: broken-repo
 
 ### Analysis
 
-[Your analysis of the root cause - what's causing the issue?]
+The root cause is the absence of a `try/except` block inside the partition loop in `Stream._sync_records` (`singer_sdk/streams/core.py`), and the absence of equivalent error handling in the stream loop in `Tap.sync_all` (`singer_sdk/tap_base.py`). When `get_records()` raises any exception for a given partition, it propagates upward uncaught, terminating the entire tap process. No recovery, state preservation, or continuation to the next partition or stream occurs. The SDK already has the vocabulary for error classification (`RetriableAPIError`, `FatalAPIError`, `IgnorableAPIError` in `singer_sdk/exceptions.py`) but no exception type that signals "skip this partition/stream and keep going."
 
 ### Proposed Solution
 
-[High-level description of your fix approach]
+Introduce a new `EndOfStreamError` exception class in `singer_sdk/exceptions.py`, inheriting from the appropriate SDK base. Then wrap the partition loop in `Stream._sync_records` and the stream loop in `Tap.sync_all` with `try/except EndOfStreamError` blocks that log the skipped context and continue to the next iteration. Tap developers can then raise `EndOfStreamError` inside `get_records()` to signal a clean, intentional skip, without crashing the tap.
 
-### Implementation Plan
+### Implementation Plan Using UMPIRE Framework:
 
-Using UMPIRE framework (adapted):
+**Understand:** The SDK provides no way for a tap to recover from a partition- or stream-level error and continue syncing. Any unhandled exception in `get_records()` crashes the entire run, leaving all subsequent partitions and streams unprocessed.
 
-**Understand:** [Restate the problem]
+**Match:** The existing `RetriableAPIError` and `FatalAPIError` pattern in `singer_sdk/exceptions.py` is the direct precedent: new exceptions are defined there, inherit from intermediate SDK base classes, and are caught at specific points in the sync loop. The CLAUDE.md exception table also lists `IgnorableAPIError` as the model for "expected / skip silently" behavior, which is closest to what `EndOfStreamError` needs to do.
 
-**Match:** [What similar patterns/solutions exist in the codebase?]
+**Plan:**
+1. Add `EndOfStreamError` to `singer_sdk/exceptions.py`, inheriting from the appropriate intermediate base, with an entry in `__all__`
+2. Wrap the `for context_element in context_list` loop body in `Stream._sync_records` (`singer_sdk/streams/core.py`) with `try/except EndOfStreamError`, logging the skipped partition and calling `continue`
+3. Wrap the stream iteration in `Tap.sync_all` (`singer_sdk/tap_base.py`) with `try/except EndOfStreamError`, logging the skipped stream and calling `continue`
+4. Add `issubclass` assertions for `EndOfStreamError` to `tests/core/test_exceptions.py`
+5. Add unit tests covering partition-level and stream-level skip scenarios, verifying that records from non-failing partitions/streams are still emitted
 
-**Plan:** [Step-by-step implementation plan]
-1. [Modify file X to do Y]
-2. [Add function Z]
-3. [Update tests]
-
-**Implement:** [Link to your branch/commits as you work]  
+**Implement:**
 - *Link to the working branch:* https://github.com/daria-hrabar/sdk/tree/fix-issue-280
 
-**Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
+**Review:**
+- [ ] `from __future__ import annotations` present in every modified file
+- [ ] `import typing as t` used for type imports
+- [ ] New exception placed in `singer_sdk/exceptions.py` and added to `__all__`
+- [ ] New exception inherits from an appropriate SDK intermediate base class, not directly from `Exception`
+- [ ] Google-style docstrings on all new/modified methods
+- [ ] `ruff check` and `ruff format` pass with no errors
+- [ ] `pre-commit run --all` passes
 
-**Evaluate:** [How will you verify it works?]
+**Evaluate:** Run the reproduction script `reproduce_issue_280.py` after the fix and confirm that all three partitions produce output, including `another-good-repo`, with the error for `broken-repo` logged but the tap continuing to completion with exit code `0`.
 
 ---
 
