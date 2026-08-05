@@ -3,7 +3,7 @@
 **Contribution Number:** 2  
 **Student:** Daria Hrabar  
 **Issue:** [Issue #280](https://github.com/meltano/sdk/issues/280)  
-**Status:** Phase II In Progress  
+**Status:** Phase III In Progress  
 
 ---
 
@@ -163,13 +163,13 @@ Introduce a new `EndOfStreamError` exception class in `singer_sdk/exceptions.py`
 - *Link to the working branch:* https://github.com/daria-hrabar/sdk/tree/fix-issue-280
 
 **Review:**
-- [ ] `from __future__ import annotations` present in every modified file
-- [ ] `import typing as t` used for type imports
-- [ ] New exception placed in `singer_sdk/exceptions.py` and added to `__all__`
-- [ ] New exception inherits from an appropriate SDK intermediate base class, not directly from `Exception`
-- [ ] Google-style docstrings on all new/modified methods
-- [ ] `ruff check` and `ruff format` pass with no errors
-- [ ] `pre-commit run --all` passes
+- [x] `from __future__ import annotations` present in every modified file
+- [x] `import typing as t` used for type imports
+- [x] New exception placed in `singer_sdk/exceptions.py` and added to `__all__`
+- [x] New exception inherits from `SkippableSyncError`, not directly from `Exception`
+- [x] Google-style docstrings on all new/modified methods
+- [x] `ruff check` and `ruff format` pass with no errors
+- [x] `pre-commit run --all` passes
 
 **Evaluate:** Run the reproduction script `reproduce_issue_280.py` after the fix and confirm that all three partitions produce output, including `another-good-repo`, with the error for `broken-repo` logged but the tap continuing to completion with exit code `0`.
 
@@ -179,26 +179,91 @@ Introduce a new `EndOfStreamError` exception class in `singer_sdk/exceptions.py`
 
 ### Unit Tests
 
-- [ ] Test case 1: [Description]
-- [ ] Test case 2: [Description]
-- [ ] Test case 3: [Description]
+- *Test case 1 — Partition-level skip:* Verifies that raising `EndOfStreamError` inside `get_records()` for a specific partition skips that partition only, while records from the remaining partitions are still emitted. Directly tests the `try/except EndOfStreamError` block added to the `for context_element in context_list` loop in `Stream._sync_records`.
+- *Test case 2 — Stream-level skip:* Verifies that raising `EndOfStreamError` inside `stream.sync()` skips that stream entirely, while all other streams in the tap continue to sync and emit records. Directly tests the `try/except EndOfStreamError` block added to `Tap.sync_all`.
+- *Test case 3 — Exception hierarchy:* Verifies that `EndOfStreamError` correctly inherits from `SkippableSyncError`, `SyncError`, and `SingerSDKError`, confirming the new exception is wired into the right place in the SDK exception hierarchy.
 
 ### Integration Tests
 
-- [ ] Integration scenario 1
-- [ ] Integration scenario 2
+- *Integration scenario 1 — Full nox test suite:* `nox -s tests` was run across all supported Python versions (3.10–3.14) after implementing the fix. All 835–836 tests passed per session with 0 failures, confirming no existing stream, state, partition, or replication behavior was broken by changes to `exceptions.py`, `core.py`, and `tap_base.py`.
+- *Integration scenario 2 — Coverage session:* `nox -s coverage` combined data from all 5 Python version sessions and confirmed `singer_sdk/exceptions.py` at **100% coverage**, verifying that all lines of the new `EndOfStreamError` class are exercised by the tests.
 
 ### Manual Testing
 
-[What you tested manually and results]
+Created and ran `reproduce_issue_280.py` before and `verify_fix_280.py` after the fix was applied to confirm the behavior change.
+
+*Before the fix:* tap crashed at `broken-repo` with an unhandled `RuntimeError`, and `another-good-repo` produced no output.
+
+*After updating `reproduce_issue_280.py` to raise `EndOfStreamError` (updated within `verify_fix_280.py`):* all three partitions were processed. The error for `broken-repo` was logged as a `WARNING` and the tap continued to completion:
+
+```
+2026-08-05 00:08:56,973 | INFO | tap-broken | tap-broken v[could not be detected], Meltano SDK v0.54.3.dev51+g1b205c028
+2026-08-05 00:08:56,974 | INFO | tap-broken | Skipping parse of env var settings...
+2026-08-05 00:08:56,975 | INFO | tap-broken.broken_stream | Beginning sync of 'broken_stream' in full_table mode
+{"type":"SCHEMA","stream":"broken_stream","schema":{"properties":{"id":{"type":["integer","null"]}},"type":"object","$schema":"https://json-schema.org/draft/2020-12/schema"},"key_properties":["id"]}
+2026-08-05 00:08:56,976 | WARNING | tap-broken.broken_stream | Properties ('repo',) were present in the 'broken_stream' stream but not found in catalog schema. Ignoring.
+{"type":"RECORD","stream":"broken_stream","record":{"id":1},"time_extracted":"2026-08-05T04:08:56.976974+00:00"}
+2026-08-05 00:08:56,977 | WARNING | tap-broken.broken_stream | Skipping partition '{'repo': 'broken-repo'}' in stream 'broken_stream': Simulated persistent error for repo: broken-repo
+{"type":"RECORD","stream":"broken_stream","record":{"id":1},"time_extracted":"2026-08-05T04:08:56.977408+00:00"}
+2026-08-05 00:08:56,977 | INFO | singer_sdk.metrics | METRIC: {"type":"timer","metric":"sync_duration","value":0.0008358955383300781,"tags":{"stream":"broken_stream","pid":7436,"context":{"repo":"another-good-repo"},"status":"succeeded"}}
+2026-08-05 00:08:56,977 | INFO | singer_sdk.metrics | METRIC: {"type":"counter","metric":"record_count","value":2,"tags":{"stream":"broken_stream","pid":7436,"context":{"repo":"another-good-repo"}}}
+{"type":"STATE","value":{"bookmarks":{"broken_stream":{"partitions":[{"context":{"repo":"good-repo"}},{"context":{"repo":"another-good-repo"}}]}}}}
+{"type":"STATE","value":{"bookmarks":{"broken_stream":{"partitions":[{"context":{"repo":"good-repo"}},{"context":{"repo":"another-good-repo"}},{"context":{"repo":"broken-repo"}}]}}}}
+```
 
 ---
 
 ## Implementation Notes
 
-### Week [X] Progress
+### Week 1 Progress
 
-[What you built this week, challenges faced, decisions made]
+**What Was Built:**
+
+- Added `EndOfStreamError` to `singer_sdk/exceptions.py`, inheriting from `SkippableSyncError`, with a docstring explaining its intended use, and registered it in `__all__`.
+- Added a `try/except EndOfStreamError` block inside the `for context_element in context_list` loop in `Stream._sync_records` (`singer_sdk/streams/core.py`) to catch partition-level signals, log a warning with the partition context and error message, and `continue` to the next partition.
+- Added a `try/except EndOfStreamError` block around `stream.sync()` in `Tap.sync_all` (`singer_sdk/tap_base.py`) to catch stream-level signals, log a warning with the stream name, and `continue` to the next stream.
+- Added `EndOfStreamError` to the existing import block in `singer_sdk/tap_base.py`.
+- Created `reproduce_issue_280.py` at the root of the repository to simulate the bug and verify the fix, using three partitions where the middle one raises `EndOfStreamError`.
+- Added three unit tests to `tests/core/test_streams.py` covering partition-level skip, stream-level skip, and exception hierarchy verification.
+
+**Challenges Faced:**
+
+- Running `nox -s tests` after committing produced an `Access Denied (os error 5)` failure in the `coverage` session, caused by Windows locking files inside the `.nox\coverage` environment. Resolved by deleting all stale nox environments and re-running:
+```powershell
+  Remove-Item -Recurse -Force .nox\tests-3-10, .nox\tests-3-11, .nox\tests-3-12, .nox\tests-3-13, .nox\tests-3-14, .nox\coverage
+```
+
+**Decisions Made:**
+
+- The initial reproduction script raised a plain `RuntimeError` to simulate a partition failure. After implementing the fix, the script was updated to `verify_fix_280.py` to raise `EndOfStreamError` instead, because the SDK's `try/except` only catches that specific signal — this is intentional. `EndOfStreamError` is an explicit, opt-in signal for tap developers: they must deliberately raise it to indicate a partition is skippable. A plain `RuntimeError` should still crash the tap, as it may indicate a genuine bug rather than an expected, recoverable condition.
+
+**Test Coverage After Week 1:**
+
+- `singer_sdk/exceptions.py` — **100%**, confirming all lines of `EndOfStreamError` are exercised by tests.
+- `singer_sdk/streams/core.py` — **90%**, consistent with the project baseline; uncovered lines are pre-existing edge cases unrelated to this fix.
+- `singer_sdk/tap_base.py` — **85%**, consistent with the project baseline.
+- Overall SDK coverage — **83%**, unchanged from baseline, confirming the fix introduced no regressions.
+
+**Windows PowerShell Output After the Nox Test Suite Run:**
+
+```
+nox > Ran 6 sessions in 2 minutes:
+nox > * tests-3.10: success, took 22 seconds
+nox > * tests-3.11: success, took 24 seconds
+nox > * tests-3.12: success, took 22 seconds
+nox > * tests-3.13: success, took 20 seconds
+nox > * tests-3.14: success, took 15 seconds
+nox > * coverage: success, took 10 seconds
+```
+
+**Windows PowerShell Commands Used:**
+
+- `git add <file>` — stages specific files for commit
+- `git commit -m "title" -m "description"` — commits with both title and body
+- `git push origin <branch-name>` — pushes local commits to the remote fork
+- `git pull origin <branch-name> --rebase` — syncs local branch with remote without creating a merge commit
+- `nox -s tests` — runs the full test suite across all supported Python versions
+- `nox -s coverage` — combines per-version coverage data and generates a full coverage report
 
 ### Week [Y] Progress
 
@@ -206,9 +271,27 @@ Introduce a new `EndOfStreamError` exception class in `singer_sdk/exceptions.py`
 
 ### Code Changes
 
-- **Files modified:** [List]
-- **Key commits:** [Links to important commits]
-- **Approach decisions:** [Why you chose certain approaches]
+**Files Modified:**
+
+- `singer_sdk/exceptions.py` — added `EndOfStreamError` class inheriting from `SkippableSyncError`, registered in `__all__`
+- `singer_sdk/streams/core.py` — added `try/except EndOfStreamError` block inside the partition loop in `_sync_records`
+- `singer_sdk/tap_base.py` — added `EndOfStreamError` to imports; added `try/except EndOfStreamError` block around `stream.sync()` in `sync_all`
+- `tests/core/test_streams.py` — added three unit tests and updated the `singer_sdk.exceptions` import block
+- `reproduce_issue_280.py` — reproduction and fix verification script at the repo root
+
+**Key Commits:**
+- [Add a new non-fatal error class EndOfStreamError](https://github.com/meltano/sdk/commit/0df3405f663c97bdae0acf4ad21c239c90161968)
+- [Add the partition-level EndOfStreamError catch in core.py](https://github.com/meltano/sdk/commit/fcdc18fadbd6dd6fe82f4cdcdcc2658a673a651d)
+- [Add the stream-level EndOfStreamError catch in tap_base.py](https://github.com/meltano/sdk/commit/c279f11d34e8310cf40415836715758dc4ccc101)
+- [test: add EndOfStreamError partition- and stream-level skip tests](https://github.com/meltano/sdk/commit/635effb6b16a678f828bdbe9d6a8e5f3db8200f2)
+- [Create a script verifying fix of issue 280](https://github.com/meltano/sdk/commit/44482954663e3ec41d854ec1955813d2c1bb8762)
+
+**Approach Decisions:**
+
+- Placed `EndOfStreamError` in `singer_sdk/exceptions.py` rather than defining it inline in `core.py` or `tap_base.py`, consistent with the project's rule that all public exceptions must live in that file.
+- Chose `SkippableSyncError` as the base class because it already carries the semantic meaning of "log, skip, and continue" — matching exactly what `EndOfStreamError` needs to signal, without introducing a new intermediate base class unnecessarily.
+- Kept `EndOfStreamError` as a named subclass rather than reusing `SkippableSyncError` directly, so the SDK's `try/except` blocks can catch it precisely without accidentally swallowing other skippable errors that were never meant to trigger partition or stream continuation.
+- Added the stream-level catch in `Tap.sync_all` in addition to the partition-level catch in `_sync_records`, because a stream can raise `EndOfStreamError` before partition iteration even begins — both levels are needed to cover different failure points in the sync lifecycle.
 
 ---
 
