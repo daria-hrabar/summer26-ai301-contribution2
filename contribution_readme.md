@@ -150,32 +150,55 @@ Introduce a new `EndOfStreamError` exception class in `singer_sdk/exceptions.py`
 
 **Understand:** The SDK provides no way for a tap to recover from a partition- or stream-level error and continue syncing. Any unhandled exception in `get_records()` crashes the entire run, leaving all subsequent partitions and streams unprocessed.
 
-**Match:** The existing `RetriableAPIError` and `FatalAPIError` pattern in `singer_sdk/exceptions.py` is the direct precedent: new exceptions are defined there, inherit from intermediate SDK base classes, and are caught at specific points in the sync loop. The CLAUDE.md exception table also lists `IgnorableAPIError` as the model for "expected / skip silently" behavior, which is closest to what `EndOfStreamError` needs to do.
+**Match:** The existing `RetriableAPIError` and `FatalAPIError` patterns in `singer_sdk/exceptions.py` are the direct precedent: new exceptions are defined, inherit from intermediate SDK base classes, and are caught at specific points in the sync loop. The CLAUDE.md exception table also lists `IgnorableAPIError` as the model for "expected / skip silently" behavior, which is closest to what `EndOfStreamError` needs to do.
 
 **Plan:**
 1. Add `EndOfStreamError` to `singer_sdk/exceptions.py`, inheriting from the appropriate intermediate base, with an entry in `__all__`
 2. Wrap the `for context_element in context_list` loop body in `Stream._sync_records` (`singer_sdk/streams/core.py`) with `try/except EndOfStreamError`, logging the skipped partition and calling `continue`
 3. Wrap the stream iteration in `Tap.sync_all` (`singer_sdk/tap_base.py`) with `try/except EndOfStreamError`, logging the skipped stream and calling `continue`
-4. Add `issubclass` assertions for `EndOfStreamError` to `tests/core/test_exceptions.py`
-5. Add unit tests covering partition-level and stream-level skip scenarios, verifying that records from non-failing partitions/streams are still emitted
+4. Add `EndOfStreamError` to the existing import block in `tests/core/test_streams.py`, and add a `test_end_of_stream_error_hierarchy` test asserting the correct inheritance chain (`SkippableSyncError` → `SyncError` → `SingerSDKError`)
+5. Add unit tests to `tests/core/test_streams.py` covering: partition-level skip (middle, first, last, only, and all partitions), stream-level skip, empty partition list, empty stream list, exception hierarchy, and verification that plain `RuntimeError` still propagates uncaught at both the partition and stream level
 
 **Implement:**
 - *Link to the working branch:* https://github.com/daria-hrabar/sdk/tree/fix-issue-280
 
-**Review:**
-- [x] `from __future__ import annotations` present in every modified file
-- [x] `import typing as t` used for type imports
-- [x] New exception placed in `singer_sdk/exceptions.py` and added to `__all__`
-- [x] New exception inherits from `SkippableSyncError`, not directly from `Exception`
-- [x] Google-style docstrings on all new/modified methods
-- [x] `ruff check` and `ruff format` pass with no errors
-- [x] `pre-commit run --all` passes
+**Review:** Stepped through `_sync_records` and `sync_all` manually, tracing the partition loop with the three-partition scenario (`good-repo`, `broken-repo`, `another-good-repo`) as the happy path, and verified edge cases, including empty partition/stream list, all partitions failing, first/last/only partition failing, and non-`EndOfStreamError` propagation at both levels.
 
-**Evaluate:** Run the reproduction script `reproduce_issue_280.py` after the fix and confirm that all three partitions produce output, including `another-good-repo`, with the error for `broken-repo` logged but the tap continuing to completion with exit code `0`.
+*Happy path trace:*
+- `context_list = [{"repo": "good-repo"}, {"repo": "broken-repo"}, {"repo": "another-good-repo"}]`
+- Iteration 1: `context_element = {"repo": "good-repo"}` → `get_records()` yields one record → record emitted ✓
+- Iteration 2: `context_element = {"repo": "broken-repo"}` → `get_records()` raises `EndOfStreamError` → caught by `except EndOfStreamError` → warning logged → `continue` ✓
+- Iteration 3: `context_element = {"repo": "another-good-repo"}` → `get_records()` yields one record → record emitted ✓
+
+*Edge case traces:*
+- **Empty partition list:** `context_list = []` → `context_list or [{}]` evaluates to `[{}]` → loop runs once with `context_element = {}` → `get_records({})` does not raise → record emitted normally → no regression ✓
+- **Empty stream list:** `discover_streams()` returns `[]` → `sync_all` iterates over nothing → exits cleanly with no records and no errors ✓
+- **All partitions fail:** all three iterations raise `EndOfStreamError` → all caught → zero records emitted → tap exits cleanly ✓
+- **First partition fails:** iteration 1 raises → caught → `continue` → iterations 2 and 3 emit records normally ✓
+- **Last partition fails:** iterations 1 and 2 emit records normally → iteration 3 raises → caught → `continue` → loop exits cleanly with no off-by-one issues ✓
+- **Only partition fails:** single iteration raises → caught → zero records → tap exits cleanly ✓
+- **Non-`EndOfStreamError` at partition level:** `RuntimeError` raised in `get_records()` → not caught by `except EndOfStreamError` → propagates up and crashes the tap → confirms the catch is precise ✓
+- **Non-`EndOfStreamError` at stream level:** `RuntimeError` raised in `stream.sync()` → not caught by `except EndOfStreamError` in `sync_all` → propagates up and crashes the tap → confirms the stream-level catch is equally precise ✓
+
+*Stream-level trace:*
+- `sync_all` iterates over `[GoodStream, BrokenStream, AnotherGoodStream]`
+- `GoodStream.sync()` completes normally ✓
+- `BrokenStream.sync()` raises `EndOfStreamError` → caught → warning logged → `continue` ✓
+- `AnotherGoodStream.sync()` completes normally ✓
+
+*Exception hierarchy verified:*
+- `EndOfStreamError` confirmed as a subclass of `SkippableSyncError` → `SyncError` → `SingerSDKError` → exception is correctly plugged into the SDK hierarchy and will not be accidentally swallowed or missed by broader SDK catches ✓
+
+Pre-commit checks passed with no errors:
+- [x] `ruff check` — no violations
+- [x] `ruff format` — no formatting changes
+- [x] `pre-commit run --all` — all hooks passed
+
+**Evaluate:** Run the `verify_fix_280.py` script, directly adapted from `reproduce_issue_280.py`, and confirm that all valid partitions produce output, including `another-good-repo`, with the error for `broken-repo` logged and the tap continuing to completion with exit code `0`.
 
 ---
 
-## Testing Strategy
+## Testing Strategy -- UPDATE
 
 ### Unit Tests
 
@@ -219,12 +242,11 @@ Created and ran `reproduce_issue_280.py` before and `verify_fix_280.py` after th
 
 **What Was Built:**
 
-- Added `EndOfStreamError` to `singer_sdk/exceptions.py`, inheriting from `SkippableSyncError`, with a docstring explaining its intended use, and registered it in `__all__`.
-- Added a `try/except EndOfStreamError` block inside the `for context_element in context_list` loop in `Stream._sync_records` (`singer_sdk/streams/core.py`) to catch partition-level signals, log a warning with the partition context and error message, and `continue` to the next partition.
-- Added a `try/except EndOfStreamError` block around `stream.sync()` in `Tap.sync_all` (`singer_sdk/tap_base.py`) to catch stream-level signals, log a warning with the stream name, and `continue` to the next stream.
-- Added `EndOfStreamError` to the existing import block in `singer_sdk/tap_base.py`.
-- Created `reproduce_issue_280.py` at the root of the repository to simulate the bug and verify the fix, using three partitions where the middle one raises `EndOfStreamError`.
-- Added three unit tests to `tests/core/test_streams.py` covering partition-level skip, stream-level skip, and exception hierarchy verification.
+- Added `EndOfStreamError` to `singer_sdk/exceptions.py`, inheriting from `SkippableSyncError`, and registered it in `__all__`
+- Added a `try/except EndOfStreamError` block inside the `for context_element in context_list` loop in `Stream._sync_records` (`singer_sdk/streams/core.py`) to catch partition-level signals, log a warning with the partition context and error message, and `continue` to the next partition
+- Added a `try/except EndOfStreamError` block around `stream.sync()` in `Tap.sync_all` (`singer_sdk/tap_base.py`) to catch stream-level signals, log a warning with the stream name, and `continue` to the next stream
+- Created `verify_fix_280.py`, derived from `reproduce_issue_280.py`, at the root of the repository to verify the fix, using three partitions where the middle one raises `EndOfStreamError`
+- Added three unit tests to `tests/core/test_streams.py` covering partition-level skip, stream-level skip, and exception hierarchy verification
 
 **Challenges Faced:**
 
@@ -235,7 +257,7 @@ Created and ran `reproduce_issue_280.py` before and `verify_fix_280.py` after th
 
 **Decisions Made:**
 
-- The initial reproduction script raised a plain `RuntimeError` to simulate a partition failure. After implementing the fix, the script was updated to `verify_fix_280.py` to raise `EndOfStreamError` instead, because the SDK's `try/except` only catches that specific signal — this is intentional. `EndOfStreamError` is an explicit, opt-in signal for tap developers: they must deliberately raise it to indicate a partition is skippable. A plain `RuntimeError` should still crash the tap, as it may indicate a genuine bug rather than an expected, recoverable condition.
+- `reproduce_issue_280.py` raised a plain `RuntimeError` to simulate a partition failure. After implementing the fix, the script was updated to `verify_fix_280.py` to raise `EndOfStreamError` instead. `EndOfStreamError` is an explicit, opt-in signal for tap developers; they must deliberately raise it to indicate a partition is skippable. A plain `RuntimeError` should still crash the tap, as it may indicate a genuine bug rather than an expected, recoverable condition.
 
 **Test Coverage After Week 1:**
 
@@ -265,19 +287,18 @@ nox > * coverage: success, took 10 seconds
 - `nox -s tests` — runs the full test suite across all supported Python versions
 - `nox -s coverage` — combines per-version coverage data and generates a full coverage report
 
-### Week [Y] Progress
+### Week 2 Progress
 
 [Continue documenting as you work]
 
 ### Code Changes
 
-**Files Modified:**
+**Files Modified (TO UPDATE):**
 
 - `singer_sdk/exceptions.py` — added `EndOfStreamError` class inheriting from `SkippableSyncError`, registered in `__all__`
-- `singer_sdk/streams/core.py` — added `try/except EndOfStreamError` block inside the partition loop in `_sync_records`
-- `singer_sdk/tap_base.py` — added `EndOfStreamError` to imports; added `try/except EndOfStreamError` block around `stream.sync()` in `sync_all`
-- `tests/core/test_streams.py` — added three unit tests and updated the `singer_sdk.exceptions` import block
-- `reproduce_issue_280.py` — reproduction and fix verification script at the repo root
+- `singer_sdk/streams/core.py` — imported `EndOfStreamError`; added `try/except EndOfStreamError` block inside the partition loop in `_sync_records`
+- `singer_sdk/tap_base.py` — imported `EndOfStreamError`; added `try/except EndOfStreamError` block around `stream.sync()` in `sync_all`
+- `tests/core/test_streams.py` — added unit tests and updated the `singer_sdk.exceptions` import block
 
 **Key Commits:**
 - [Add a new non-fatal error class EndOfStreamError](https://github.com/meltano/sdk/commit/0df3405f663c97bdae0acf4ad21c239c90161968)
@@ -288,10 +309,10 @@ nox > * coverage: success, took 10 seconds
 
 **Approach Decisions:**
 
-- Placed `EndOfStreamError` in `singer_sdk/exceptions.py` rather than defining it inline in `core.py` or `tap_base.py`, consistent with the project's rule that all public exceptions must live in that file.
-- Chose `SkippableSyncError` as the base class because it already carries the semantic meaning of "log, skip, and continue" — matching exactly what `EndOfStreamError` needs to signal, without introducing a new intermediate base class unnecessarily.
-- Kept `EndOfStreamError` as a named subclass rather than reusing `SkippableSyncError` directly, so the SDK's `try/except` blocks can catch it precisely without accidentally swallowing other skippable errors that were never meant to trigger partition or stream continuation.
-- Added the stream-level catch in `Tap.sync_all` in addition to the partition-level catch in `_sync_records`, because a stream can raise `EndOfStreamError` before partition iteration even begins — both levels are needed to cover different failure points in the sync lifecycle.
+- Placed `EndOfStreamError` in `singer_sdk/exceptions.py` rather than defining it inline in `core.py` or `tap_base.py`, consistent with the project's rule that all public exceptions must live in that file
+- Chose `SkippableSyncError` as the base class because it already carries the semantic meaning of "log, skip, and continue" — matching exactly what `EndOfStreamError` needs to signal
+- Kept `EndOfStreamError` as a named subclass rather than reusing `SkippableSyncError` directly, so the SDK's `try/except` blocks can catch it precisely without accidentally swallowing other skippable errors that were never meant to trigger partition or stream continuation
+- Added the stream-level catch in `Tap.sync_all` in addition to the partition-level catch in `_sync_records`, because a stream can raise `EndOfStreamError` before partition iteration even begins. Both levels are needed to cover different failure points in the sync lifecycle
 
 ---
 
