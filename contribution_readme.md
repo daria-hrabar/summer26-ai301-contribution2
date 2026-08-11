@@ -3,7 +3,7 @@
 **Contribution Number:** 2  
 **Student:** Daria Hrabar  
 **Issue:** [Issue #280](https://github.com/meltano/sdk/issues/280)  
-**Status:** Phase III In Progress  
+**Status:** Phase III Completed  
 
 ---
 
