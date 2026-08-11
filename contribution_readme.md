@@ -274,7 +274,7 @@ Adapted `verify_fix_280.py` from the original reproduction script `reproduce_iss
 - `singer_sdk/tap_base.py` — **85%**, consistent with the project baseline.
 - Overall SDK coverage — **83%**, unchanged from baseline, confirming the fix introduced no regressions.
 
-**Windows PowerShell Output After the Nox Test Suite Run:**
+**Windows PowerShell Output After the Latest Nox Test Suite Run:**
 
 ```
 nox > Ran 6 sessions in 2 minutes:
@@ -294,6 +294,13 @@ nox > * coverage: success, took 10 seconds
 - `git pull origin <branch-name> --rebase` — syncs local branch with remote without creating a merge commit
 - `nox -s tests` — runs the full test suite across all supported Python versions
 - `nox -s coverage` — combines per-version coverage data and generates a full coverage report
+
+**VS Code Extension Installed:**
+
+*Ruff extension* — provides real-time linting and auto-fix commands directly in the editor, eliminating most pre-commit failures before committing. Key commands used:
+- `>Ruff: Fix All` — auto-fixes all Ruff errors in the current file
+- `>Format Document` — applies Black formatting
+- `>Organize Imports` — sorts and cleans up import statements
 
 ### Week 2 Progress
 
