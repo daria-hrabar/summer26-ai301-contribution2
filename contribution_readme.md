@@ -198,13 +198,21 @@ Pre-commit checks passed with no errors:
 
 ---
 
-## Testing Strategy -- UPDATE
+## Testing Strategy
 
 ### Unit Tests
 
 - *Test case 1 — Partition-level skip:* Verifies that raising `EndOfStreamError` inside `get_records()` for a specific partition skips that partition only, while records from the remaining partitions are still emitted. Directly tests the `try/except EndOfStreamError` block added to the `for context_element in context_list` loop in `Stream._sync_records`.
 - *Test case 2 — Stream-level skip:* Verifies that raising `EndOfStreamError` inside `stream.sync()` skips that stream entirely, while all other streams in the tap continue to sync and emit records. Directly tests the `try/except EndOfStreamError` block added to `Tap.sync_all`.
 - *Test case 3 — Exception hierarchy:* Verifies that `EndOfStreamError` correctly inherits from `SkippableSyncError`, `SyncError`, and `SingerSDKError`, confirming the new exception is wired into the right place in the SDK exception hierarchy.
+- *Test case 4 — Empty partition list:* Verifies that when `partitions` returns an empty list, the SDK falls back to treating the stream as unpartitioned, running `get_records` once with an empty context and emitting records normally without crashing.
+- *Test case 5 — Empty stream list:* Verifies that when `discover_streams()` returns an empty list, `sync_all` exits cleanly with no records and no errors.
+- *Test case 6 — All partitions fail:* Verifies that when every partition raises `EndOfStreamError`, the tap exits cleanly with zero records emitted.
+- *Test case 7 — First partition fails:* Verifies that `continue` correctly skips to the next iteration rather than breaking out of the loop entirely, with remaining partitions still emitting records.
+- *Test case 8 — Last partition fails:* Verifies that a `continue` on the final loop iteration exits cleanly with no off-by-one issues and records from earlier partitions preserved.
+- *Test case 9 — Only partition fails:* Verifies that a single-partition stream that raises `EndOfStreamError` exits cleanly with zero records emitted.
+- *Test case 10 — Non-`EndOfStreamError` propagates at partition level:* Verifies that a plain `RuntimeError` raised in `get_records()` is not caught by the `except EndOfStreamError` block and still crashes the tap, confirming the catch is precise.
+- *Test case 11 — Non-`EndOfStreamError` propagates at stream level:* Verifies that a plain `RuntimeError` raised in `stream.sync()` is not caught by the stream-level `except EndOfStreamError` block in `sync_all` and still crashes the tap.
 
 ### Integration Tests
 
@@ -213,11 +221,11 @@ Pre-commit checks passed with no errors:
 
 ### Manual Testing
 
-Created and ran `reproduce_issue_280.py` before and `verify_fix_280.py` after the fix was applied to confirm the behavior change.
+Adapted `verify_fix_280.py` from the original reproduction script `reproduce_issue_280.py` to confirm the favorable behavior change after introducing `EndOfStreamError`.
 
 *Before the fix:* tap crashed at `broken-repo` with an unhandled `RuntimeError`, and `another-good-repo` produced no output.
 
-*After updating `reproduce_issue_280.py` to raise `EndOfStreamError` (updated within `verify_fix_280.py`):* all three partitions were processed. The error for `broken-repo` was logged as a `WARNING` and the tap continued to completion:
+*After the fix:* all three partitions were processed within `verify_fix_280.py`. The `EndOfStreamError` for `broken-repo` was logged as a `WARNING`, and the tap continued to completion:
 
 ```
 2026-08-05 00:08:56,973 | INFO | tap-broken | tap-broken v[could not be detected], Meltano SDK v0.54.3.dev51+g1b205c028
@@ -289,16 +297,58 @@ nox > * coverage: success, took 10 seconds
 
 ### Week 2 Progress
 
-[Continue documenting as you work]
+**What Was Built:**
+
+- Added 8 additional unit tests to `tests/core/test_streams.py` covering: empty partition list fallback, empty stream list, all partitions failing, first/last/only partition failing, and non-`EndOfStreamError` propagation at both partition and stream level.
+
+**Challenges Faced:**
+
+- After adding new unit tests, `nox -s tests` failed across all Python versions due to stale cached environments. Resolved by restarting Windows PowerShell as an Administrator, clearing cached environments, and reinstalling the hooks:
+```powershell
+  Remove-Item -Recurse -Force "$env:USERPROFILE\.cache\pre-commit"
+  pre-commit install --install-hooks
+```
+
+**Findings & Decisions Made:**
+
+- *Empty partition fallback behavior:* Investigation of the `test_end_of_stream_error_empty_partition_list` failure revealed that an empty `partitions` list does not mean "sync nothing" — the SDK falls back to `context_list or [{}]`, treating the stream as unpartitioned and running `get_records` once with an empty context. The test assertion was corrected from `records == []` to `len(records) == 1`.
+
+- *Misleading record emission in `reproduce_issue_280.py`:* The reproduction script emits one record before crashing, but the metrics tag it under `"context":{"repo":"broken-repo"}`:
+
+```
+{"type":"counter","metric":"record_count","value":1,"tags":
+{"stream":"broken_stream","pid":14408,"context":{"repo":"broken-repo"}}}
+```
+
+The record was actually emitted by `good-repo` — the SDK associates the final metrics with the last active context at the time of the crash, which is `broken-repo`. No change was made to the reproduction script.
+
+**Test Coverage Report:**
+
+No change observed from Week 1. All three modified files remain at the same percentages: `singer_sdk/exceptions.py` at 100%, `singer_sdk/streams/core.py` at 90%, and `singer_sdk/tap_base.py` at 85%. The 8 new tests cover additional edge cases but exercise code paths already counted as covered by the original 3 tests, so no new lines are unlocked.
+
+**Windows PowerShell Output After the Latest Nox Test Suite Run:**
+
+```
+nox > Session coverage was successful in 3 seconds.
+nox > Ran 6 sessions in 4 minutes:
+nox > * tests-3.10: success, took 50 seconds
+nox > * tests-3.11: success, took 45 seconds
+nox > * tests-3.12: success, took 45 seconds
+nox > * tests-3.13: success, took 40 seconds
+nox > * tests-3.14: success, took 35 seconds
+nox > * coverage: success, took 3 seconds
+```
+
+---
 
 ### Code Changes
 
-**Files Modified (TO UPDATE):**
+**Files Modified:**
 
 - `singer_sdk/exceptions.py` — added `EndOfStreamError` class inheriting from `SkippableSyncError`, registered in `__all__`
 - `singer_sdk/streams/core.py` — imported `EndOfStreamError`; added `try/except EndOfStreamError` block inside the partition loop in `_sync_records`
 - `singer_sdk/tap_base.py` — imported `EndOfStreamError`; added `try/except EndOfStreamError` block around `stream.sync()` in `sync_all`
-- `tests/core/test_streams.py` — added unit tests and updated the `singer_sdk.exceptions` import block
+- `tests/core/test_streams.py` — added 11 unit tests and updated the `singer_sdk.exceptions` import block
 
 **Key Commits:**
 - [Add a new non-fatal error class EndOfStreamError](https://github.com/meltano/sdk/commit/0df3405f663c97bdae0acf4ad21c239c90161968)
@@ -306,6 +356,9 @@ nox > * coverage: success, took 10 seconds
 - [Add the stream-level EndOfStreamError catch in tap_base.py](https://github.com/meltano/sdk/commit/c279f11d34e8310cf40415836715758dc4ccc101)
 - [test: add EndOfStreamError partition- and stream-level skip tests](https://github.com/meltano/sdk/commit/635effb6b16a678f828bdbe9d6a8e5f3db8200f2)
 - [Create a script verifying fix of issue 280](https://github.com/meltano/sdk/commit/44482954663e3ec41d854ec1955813d2c1bb8762)
+- [Added new edge cases, including empty partition/stream list, all partitions failing, first/last/only partition failing, and `non-EndOfStreamError` propagation at both levels](https://github.com/meltano/sdk/commit/3064682714f38c0a9172f470eeb41d0ffe2118bc)
+- [Modify `test_end_of_stream_error_empty_partition_list` test to treat an empty partition as an unpartitioned stream instead of an empty list
+](https://github.com/meltano/sdk/commit/088510920137be8d99e77f96f8d6f7b86d289531)
 
 **Approach Decisions:**
 
@@ -313,6 +366,7 @@ nox > * coverage: success, took 10 seconds
 - Chose `SkippableSyncError` as the base class because it already carries the semantic meaning of "log, skip, and continue" — matching exactly what `EndOfStreamError` needs to signal
 - Kept `EndOfStreamError` as a named subclass rather than reusing `SkippableSyncError` directly, so the SDK's `try/except` blocks can catch it precisely without accidentally swallowing other skippable errors that were never meant to trigger partition or stream continuation
 - Added the stream-level catch in `Tap.sync_all` in addition to the partition-level catch in `_sync_records`, because a stream can raise `EndOfStreamError` before partition iteration even begins. Both levels are needed to cover different failure points in the sync lifecycle
+- Corrected the empty partition test assertion from `records == []` to `len(records) == 1` after discovering the SDK's fallback behavior
 
 ---
 
