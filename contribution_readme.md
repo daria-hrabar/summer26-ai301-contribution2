@@ -385,40 +385,34 @@ nox > * coverage: success, took 3 seconds
 
 Closes #280
 
-**Summary**
+### Summary
 
-Introduces `EndOfStreamError`, a new exception in `singer_sdk/exceptions.py` that tap developers can raise inside `get_records()` to signal that a partition or stream should be skipped without aborting the entire sync. The SDK catches this signal at two levels — inside the partition loop in `Stream._sync_records` and around each stream call in `Tap.sync_all` — logs a warning, and continues to the next partition or stream.
+Introduces `EndOfStreamError`, a new exception in `singer_sdk/exceptions.py` that tap developers can raise inside `get_records()` to signal that a partition or stream should be skipped without aborting the entire sync. The SDK catches this signal — along with all other `SkippableSyncError` subclasses — at two levels: inside the `get_records` iteration in `Stream._sync_records` and around each stream call in `Tap.sync_all`. On a skippable error, a warning is logged, partition state is finalized, and the sync continues to the next partition or stream.
 
-**Motivation**
+### Motivation
 
-Currently, any unhandled exception raised during a partitioned sync aborts the entire tap run. All remaining partitions and streams are silently skipped, and no state is emitted for them. This is particularly painful for taps like `tap-github` that iterate over a list of repositories as partitions — a single persistent API error on one repository prevents all subsequent repositories from being synced (see MeltanoLabs/tap-github#52).
+Currently, any unhandled exception raised during a partitioned sync aborts the entire tap run. All remaining partitions and streams are silently skipped, and no state is emitted for them. This is particularly painful for taps like `tap-github` that iterate over a list of repositories as partitions — a single persistent API error on one repository prevents all subsequent repositories from being synced (see [MeltanoLabs/tap-github#52](https://github.com/MeltanoLabs/tap-github/issues/52)).
 
-**Changes**
+### Changes
 
 - `singer_sdk/exceptions.py` — added `EndOfStreamError(SkippableSyncError)` and registered it in `__all__`
-- `singer_sdk/streams/core.py` — wrapped the `for context_element in context_list` loop body in `Stream._sync_records` with `try/except EndOfStreamError`, logging a warning and calling `continue`
-- `singer_sdk/tap_base.py` — wrapped `stream.sync()` in `Tap.sync_all` with `try/except EndOfStreamError`, logging a warning and calling `continue`
-- `tests/core/test_streams.py` — added 11 unit tests covering partition-level skip, stream-level skip, exception hierarchy, edge cases (empty partition list, empty stream list, all/first/last/only partition failing), and verification that non-`EndOfStreamError` exceptions still propagate uncaught at both levels
+- `singer_sdk/streams/core.py` — wrapped `get_records()` and its iteration loop in `Stream._sync_records` with `try/except SkippableSyncError` (skip, finalize state, continue) and `except RetriableSyncError` (finalize state, re-raise); added `RetriableSyncError` and `SkippableSyncError` to imports; updated docstring
+- `singer_sdk/tap_base.py` — wrapped `stream.sync()` in `Tap.sync_all` with `try/except SkippableSyncError`, logging a warning and calling `continue`; added `SkippableSyncError` to imports
+- `tests/core/test_streams.py` — added 11 unit tests covering partition-level skip, stream-level skip, exception hierarchy, edge cases (empty partition list, empty stream list, all/first/last/only partition failing), and verification that non-`SkippableSyncError` exceptions still propagate uncaught at both levels
 
-**Design decisions**
+### Design Decisions
 
-- `EndOfStreamError` is an **explicit, opt-in signal**. Tap developers must deliberately raise it to indicate a partition is skippable. Plain exceptions (e.g. `RuntimeError`) still crash the tap — this is intentional, as they may indicate genuine bugs rather than expected, recoverable conditions.
-- `SkippableSyncError` was chosen as the base class because it already carries the semantic meaning of "log, skip, and continue", consistent with the existing exception hierarchy in this file.
-- The stream-level catch in `Tap.sync_all` is separate from the partition-level catch in `_sync_records` because a stream can raise `EndOfStreamError` before partition iteration even begins — both levels are needed to cover different failure points in the sync lifecycle.
+- `EndOfStreamError` is an **explicit, opt-in signal** for tap developers. Raising it inside `get_records()` signals that a partition is intentionally skippable. Plain exceptions (e.g. `RuntimeError`) still crash the tap — this is intentional, as they may indicate genuine bugs rather than expected, recoverable conditions.
+- The catch uses `SkippableSyncError` rather than `EndOfStreamError` directly, so existing subclasses such as `SkippableAPIError` and `InvalidRecord` also benefit from the skip-and-continue behavior without requiring tap code changes.
+- `RetriableSyncError` is caught at the partition level to finalize and flush state before re-raising, ensuring the orchestrator has a clean checkpoint before the retry mechanism takes over. It is not swallowed.
+- `FatalSyncError` and its subclasses (including `FatalAPIError`) are intentionally left uncaught. These signal conditions severe enough to abort the entire sync — such as missing key properties or invalid stream sort order — and silently skipping them would hide genuine data integrity issues.
+- The `try` block wraps both the `get_records()` call and the iteration loop over it. This is necessary because `get_records` is a generator function — calling it does not execute any of its code. The `EndOfStreamError` is only raised during iteration, not at the point of the call.
+- The stream-level catch in `Tap.sync_all` is separate from the partition-level catch in `_sync_records` because a stream can raise `SkippableSyncError` before partition iteration begins — both levels are needed to cover different failure points in the sync lifecycle.
+- A structured error-reporting mechanism for skipped partitions (beyond warning logs) is not included in this PR. Input from maintainers on the preferred shape of such a mechanism is welcome before implementation.
 
-**Testing**
+### Testing
 
-All 843 existing tests pass across Python 3.10–3.14 with no regressions. `singer_sdk/exceptions.py` reaches 100% coverage.
-
-```
-nox > Ran 6 sessions in 6 minutes:
-nox > * tests-3.10: success, took 2 minutes
-nox > * tests-3.11: success, took 51 seconds
-nox > * tests-3.12: success, took a minute
-nox > * tests-3.13: success, took a minute
-nox > * tests-3.14: success, took 45 seconds
-nox > * coverage: success, took 9 seconds
-```
+All 855 tests pass across Python 3.10–3.14 with no regressions. `singer_sdk/exceptions.py` reaches 100% coverage.
 
 ## Maintainer Feedback
 
