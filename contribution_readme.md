@@ -3,7 +3,7 @@
 **Contribution Number:** 2  
 **Student:** Daria Hrabar  
 **Issue:** [Issue #280](https://github.com/meltano/sdk/issues/280)  
-**Status:** Phase III Completed  
+**Status:** Phase IV In Progress  
 
 ---
 
@@ -379,15 +379,74 @@ nox > * coverage: success, took 3 seconds
 
 ## Pull Request
 
-**PR Link:** [GitHub PR URL when submitted]
+**PR Link:** [feat(taps): add EndOfStreamError to skip partitions and streams gracefully-#3761](https://github.com/meltano/sdk/pull/3761)
 
-**PR Description:** [Draft or final PR description - much of the content above can be adapted]
+**PR Description:**
 
-**Maintainer Feedback:**
-- [Date]: [Summary of feedback received]
-- [Date]: [How you addressed it]
+Closes #280
 
-**Status:** [Awaiting review / Iterating / Approved / Merged]
+**Summary**
+
+Introduces `EndOfStreamError`, a new exception in `singer_sdk/exceptions.py` that tap developers can raise inside `get_records()` to signal that a partition or stream should be skipped without aborting the entire sync. The SDK catches this signal at two levels — inside the partition loop in `Stream._sync_records` and around each stream call in `Tap.sync_all` — logs a warning, and continues to the next partition or stream.
+
+**Motivation**
+
+Currently, any unhandled exception raised during a partitioned sync aborts the entire tap run. All remaining partitions and streams are silently skipped, and no state is emitted for them. This is particularly painful for taps like `tap-github` that iterate over a list of repositories as partitions — a single persistent API error on one repository prevents all subsequent repositories from being synced (see MeltanoLabs/tap-github#52).
+
+**Changes**
+
+- `singer_sdk/exceptions.py` — added `EndOfStreamError(SkippableSyncError)` and registered it in `__all__`
+- `singer_sdk/streams/core.py` — wrapped the `for context_element in context_list` loop body in `Stream._sync_records` with `try/except EndOfStreamError`, logging a warning and calling `continue`
+- `singer_sdk/tap_base.py` — wrapped `stream.sync()` in `Tap.sync_all` with `try/except EndOfStreamError`, logging a warning and calling `continue`
+- `tests/core/test_streams.py` — added 11 unit tests covering partition-level skip, stream-level skip, exception hierarchy, edge cases (empty partition list, empty stream list, all/first/last/only partition failing), and verification that non-`EndOfStreamError` exceptions still propagate uncaught at both levels
+
+**Design decisions**
+
+- `EndOfStreamError` is an **explicit, opt-in signal**. Tap developers must deliberately raise it to indicate a partition is skippable. Plain exceptions (e.g. `RuntimeError`) still crash the tap — this is intentional, as they may indicate genuine bugs rather than expected, recoverable conditions.
+- `SkippableSyncError` was chosen as the base class because it already carries the semantic meaning of "log, skip, and continue", consistent with the existing exception hierarchy in this file.
+- The stream-level catch in `Tap.sync_all` is separate from the partition-level catch in `_sync_records` because a stream can raise `EndOfStreamError` before partition iteration even begins — both levels are needed to cover different failure points in the sync lifecycle.
+
+**Testing**
+
+All 843 existing tests pass across Python 3.10–3.14 with no regressions. `singer_sdk/exceptions.py` reaches 100% coverage.
+
+```
+nox > Ran 6 sessions in 6 minutes:
+nox > * tests-3.10: success, took 2 minutes
+nox > * tests-3.11: success, took 51 seconds
+nox > * tests-3.12: success, took a minute
+nox > * tests-3.13: success, took a minute
+nox > * tests-3.14: success, took 45 seconds
+nox > * coverage: success, took 9 seconds
+```
+
+## Maintainer Feedback
+
+*8/31/2026*
+
+**Sourcery AI**
+
+- Flagged one blocking issue in `singer_sdk/streams/core.py`: when a child stream raises `EndOfStreamError` during `_process_record`, the exception propagates through `_sync_children` and is caught by the parent stream's partition-level `try/except` block — causing the entire parent partition to be skipped instead of only the child stream. Suggested fix: handle `EndOfStreamError` at the child-stream boundary, or narrow the `try` block so child sync exceptions are not attributed to the parent partition.
+- Noted that if `EndOfStreamError` is raised after records or checkpoint state have already been written, the skipped partition or stream can finish with missing records — reverting will not restore output or state already emitted. Impact is bounded to the skipped unit and can generally be repaired by rerunning.
+- Flagged that the PR does not catch or adapt the existing `RetriableAPIError` or `FatalAPIError` types referenced in issue #280 — taps raising those errors will still abort unless they are modified to raise `EndOfStreamError` instead.
+- Flagged that no state updates or error-reporting mechanism are added for skipped partitions or streams beyond logging a warning.
+- Detected a security vulnerability in the `cryptography` dependency (flagged via `uv.lock`).
+
+**Codecov**
+
+- All modified and coverable lines are covered by tests
+- Project coverage is **94.36%**, up from 94.35% on `main` — a marginal improvement of `+0.01%`
+- 8 new lines added, all covered
+- `core` flag coverage: `82.95% <94.73%> (+0.02%)`
+- `end-to-end` flag coverage: `75.56% <78.94%> (-0.05%)`
+- `optional-components` flag coverage: `44.96% <2.63%> (-0.06%)`
+
+**CodSpeed**
+
+- Merging this PR will not alter performance
+- All 14 existing benchmarks are untouched
+
+**Status:** Iterating & awaiting maintainer's feedback
 
 ---
 
